@@ -62,7 +62,6 @@ worker.ts               - The complete Worker source code
 1. Read `SETUP.md` to get your Cloudflare Worker running
 2. Read `AIPPY-INTEGRATION.md` for the exact fetch() calls to paste into Aippy
 3. Read `MULTIPLAYER.md` if you want to understand how the battle system works
-4. Copy `worker.ts` into your Worker editor and deploy
 
 ---
 

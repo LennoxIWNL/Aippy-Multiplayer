@@ -45,7 +45,7 @@ EXAMPLE-CODE.md         - Copy-paste ready snippets
 worker.ts               - The complete Worker source code
 ```
 
-```
+
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md)
@@ -54,7 +54,6 @@ worker.ts               - The complete Worker source code
 - [Multiplayer Logic](MULTIPLAYER.md)
 - [Aippy Integration](AIPPY-INTEGRATION.md)
 - [Example Code](EXAMPLE-CODE.md)
-```
 
 ---
 

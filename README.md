@@ -45,6 +45,17 @@ EXAMPLE-CODE.md         - Copy-paste ready snippets
 worker.ts               - The complete Worker source code
 ```
 
+```
+## Documentation
+
+- [Architecture](ARCHITECTURE.md)
+- [Setup Guide](SETUP.md)
+- [Endpoints](ENDPOINTS.md)
+- [Multiplayer Logic](MULTIPLAYER.md)
+- [Aippy Integration](AIPPY-INTEGRATION.md)
+- [Example Code](EXAMPLE-CODE.md)
+```
+
 ---
 
 ## Quick Start

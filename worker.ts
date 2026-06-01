@@ -18,8 +18,8 @@
 //   env.GAME_LEADERBOARD  KV namespace - cached top-N leaderboard
 //   env.GAME_MATCHES      KV namespace - active match states
 //
-// Originally built by Lennox (@Lennox on Aippy) for Pocket Pack Opener,
-// then generalized into a reusable template for the Aippy community.
+// Made by Lennox (@Lennox on Aippy) — built and proven on Pocket Pack Opener,
+// then shared as a reusable template.
 // ============================================================================
 
 export interface Env {

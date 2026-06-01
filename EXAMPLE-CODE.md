@@ -1,31 +1,31 @@
 # Example Code
-### Copy-paste ready snippets for Aippy creators
 
-Written by Lennox (@Lennox on Aippy)
+### Copy-paste-ready snippets for Aippy creators
+
+Drop these into your Aippy game and adapt the field names to your game. Nothing
+here is genre-specific — the `stats`, `data`, and `state` payloads are yours to
+shape.
 
 ---
 
 ## Full API Helper Module
 
-Drop this into your Aippy game as a self-contained API helper. Import or reference it wherever needed.
+A self-contained helper covering every endpoint. Reference it wherever needed.
 
 ```typescript
 // ================================================================
-// api.ts - Cloudflare Worker API helper
-// Based on Pocket Pack Opener by Lennox (@Lennox on Aippy)
+// api.ts - Cloudflare Worker API helper for Aippy multiplayer
 // ================================================================
 
-const API = "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev";
+const API = "https://your-game-api.YOUR-SUBDOMAIN.workers.dev";
 
-// ----------------------------------------------------------------
-// Users
-// ----------------------------------------------------------------
+// ---------------------------------------------------------------- Users
 
 export async function registerPlayer(username?: string) {
   const res = await fetch(`${API}/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username })
+    body: JSON.stringify({ username }),
   });
   return res.json(); // { success, userId, username }
 }
@@ -35,123 +35,92 @@ export async function getPlayer(userId: string) {
   return res.json();
 }
 
+// `stats` is free-form: pass whatever counters your game tracks.
 export async function submitScore(
   userId: string,
   score: number,
-  stats?: {
-    gymWins?: number;
-    eliteFourWins?: number;
-    battleWins?: number;
-    battleLosses?: number;
-    packOpens?: number;
-  }
+  stats?: Record<string, number>,
 ) {
   const res = await fetch(`${API}/score`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, score, ...stats })
+    body: JSON.stringify({ userId, score, stats }),
   });
   return res.json(); // { success, score }
 }
 
-// ----------------------------------------------------------------
-// Leaderboard
-// ----------------------------------------------------------------
+// ---------------------------------------------------------------- Leaderboard
 
 export async function getLeaderboard() {
   const res = await fetch(`${API}/leaderboard`);
-  return res.json(); // { leaderboard: [{userId, username, score}] }
+  return res.json(); // { leaderboard: [{ userId, username, score }] }
 }
 
-// ----------------------------------------------------------------
-// Friends
-// ----------------------------------------------------------------
+// ---------------------------------------------------------------- Friends
 
 export async function addFriend(userId: string, friendId: string) {
   const res = await fetch(`${API}/friend/add`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, friendId })
+    body: JSON.stringify({ userId, friendId }),
   });
   return res.json(); // { success, friendUsername } or { error }
 }
 
 export async function getFriendList(userId: string) {
   const res = await fetch(`${API}/friend/list?userId=${userId}`);
-  return res.json(); // { friends: [{userId, username, score, ...}] }
+  return res.json(); // { friends: [{ userId, username, score, stats, lastSeen }] }
 }
 
-// ----------------------------------------------------------------
-// Battles
-// ----------------------------------------------------------------
+// ---------------------------------------------------------------- Matches
 
-export async function createBattle(userId: string, username: string, team: any[]) {
-  const res = await fetch(`${API}/battle/create`, {
+export async function createMatch(userId: string, username: string, data?: unknown, state?: unknown) {
+  const res = await fetch(`${API}/match/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, username, team })
+    body: JSON.stringify({ userId, username, data, state }),
   });
-  return res.json(); // { success, battleId }
+  return res.json(); // { success, matchId }
 }
 
-export async function joinBattle(
-  battleId: string,
+export async function joinMatch(matchId: string, userId: string, username: string, data?: unknown) {
+  const res = await fetch(`${API}/match/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ matchId, userId, username, data }),
+  });
+  return res.json(); // { success, match }
+}
+
+// Submit a turn. Pass the new shared state your client computed.
+// Include winnerUserId to end the match.
+export async function submitTurn(
+  matchId: string,
   userId: string,
-  username: string,
-  team: any[]
+  state: unknown,
+  logEntry?: string,
+  winnerUserId?: string,
 ) {
-  const res = await fetch(`${API}/battle/join`, {
+  const res = await fetch(`${API}/match/move`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ battleId, userId, username, team })
+    body: JSON.stringify({ matchId, userId, state, logEntry, winnerUserId }),
   });
-  return res.json(); // { success, battle }
+  return res.json(); // { success, match } or { error: "Not your turn" }
 }
 
-export async function submitMove(
-  battleId: string,
-  userId: string,
-  moveIndex: number,
-  damage: number
-) {
-  const res = await fetch(`${API}/battle/move`, {
+export async function getMatchState(matchId: string) {
+  const res = await fetch(`${API}/match/state?matchId=${matchId}`);
+  return res.json(); // full match object
+}
+
+export async function forfeitMatch(matchId: string, userId: string) {
+  const res = await fetch(`${API}/match/forfeit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ battleId, userId, action: "move", moveIndex, damage })
+    body: JSON.stringify({ matchId, userId }),
   });
-  return res.json(); // { success, battle }
-}
-
-export async function submitSwitch(
-  battleId: string,
-  userId: string,
-  switchTo: number
-) {
-  const res = await fetch(`${API}/battle/move`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ battleId, userId, action: "switch", switchTo })
-  });
-  return res.json(); // { success, battle }
-}
-
-export async function getBattleState(battleId: string) {
-  const res = await fetch(`${API}/battle/state?battleId=${battleId}`);
-  return res.json(); // full battle state object
-}
-
-export async function getActiveBattle(userId: string) {
-  const res = await fetch(`${API}/battle/list?userId=${userId}`);
-  return res.json(); // { activeBattle: battle | null }
-}
-
-export async function forfeitBattle(battleId: string, userId: string) {
-  const res = await fetch(`${API}/battle/forfeit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ battleId, userId })
-  });
-  return res.json(); // { success, battle }
+  return res.json(); // { success, match }
 }
 ```
 
@@ -160,21 +129,16 @@ export async function forfeitBattle(battleId: string, userId: string) {
 ## First Launch Check
 
 ```typescript
-// Call this in your top-level component useEffect
 async function initPlayer() {
   if (gameState.userId) return; // already registered
 
   try {
     const data = await registerPlayer(gameState.playerName);
     if (data.success) {
-      setGameState(prev => ({
-        ...prev,
-        userId: data.userId,
-        username: data.username
-      }));
+      setGameState(prev => ({ ...prev, userId: data.userId, username: data.username }));
     }
   } catch {
-    // No internet - will register next launch
+    // No internet — will register next launch.
   }
 }
 ```
@@ -199,14 +163,12 @@ function LeaderboardScreen() {
 
   return (
     <div>
-      {board.map((entry, index) => (
+      {board.map((entry, i) => (
         <div
           key={entry.userId}
-          style={{
-            background: entry.userId === gameState.userId ? "#ffd700" : "white"
-          }}
+          style={{ background: entry.userId === gameState.userId ? "#ffd700" : "white" }}
         >
-          #{index + 1} {entry.username} - {entry.score.toLocaleString()} pts
+          #{i + 1} {entry.username} — {entry.score.toLocaleString()} pts
         </div>
       ))}
     </div>
@@ -216,69 +178,62 @@ function LeaderboardScreen() {
 
 ---
 
-## Battle Screen Turn Logic
+## Match Screen Turn Logic
+
+This is genre-agnostic scaffolding. Swap `<YourGameBoard />` and your move
+handler for your actual game; the turn/polling plumbing stays the same.
 
 ```typescript
-function BattleScreen({ battleId, userId }) {
-  const [battle, setBattle] = useState(null);
+function MatchScreen({ matchId, userId }) {
+  const [match, setMatch] = useState(null);
   const pollRef = useRef(null);
 
-  const isPlayer1 = battle?.player1?.userId === userId;
-  const isMyTurn = battle
-    ? (isPlayer1 ? battle.turn === "player1" : battle.turn === "player2")
+  const isPlayer1 = match?.player1?.userId === userId;
+  const isMyTurn = match
+    ? (isPlayer1 ? match.turn === "player1" : match.turn === "player2")
     : false;
+  const opponent = match ? (isPlayer1 ? match.player2 : match.player1) : null;
 
   useEffect(() => {
-    // Initial load
-    getBattleState(battleId).then(setBattle);
+    getMatchState(matchId).then(setMatch);
 
-    // Start polling
     pollRef.current = setInterval(async () => {
-      const updated = await getBattleState(battleId);
-      setBattle(prev => {
-        if (updated.lastMoveAt !== prev?.lastMoveAt) return updated;
-        return prev;
-      });
-      if (updated.status === "finished") {
-        clearInterval(pollRef.current);
-      }
+      const updated = await getMatchState(matchId);
+      setMatch(prev => (updated.lastMoveAt !== prev?.lastMoveAt ? updated : prev));
+      if (updated.status === "finished") clearInterval(pollRef.current);
     }, 10000);
 
     return () => clearInterval(pollRef.current);
-  }, [battleId]);
+  }, [matchId]);
 
-  async function handleMove(moveIndex, damage) {
-    const result = await submitMove(battleId, userId, moveIndex, damage);
-    if (result.success) setBattle(result.battle);
+  // Compute the next shared state with YOUR game rules, then submit it.
+  async function takeTurn(action) {
+    const nextState = applyMyGameRules(match.state, action, isPlayer1);
+    const winnerUserId = checkForWinner(nextState, match);
+    const result = await submitTurn(
+      matchId,
+      userId,
+      nextState,
+      describeAction(action),
+      winnerUserId,
+    );
+    if (result.success) setMatch(result.match);
+    else showNotification(result.error); // e.g. "Not your turn"
   }
 
-  if (!battle) return <LoadingSpinner />;
-
-  const myHP = isPlayer1
-    ? battle.p1PokemonHP[battle.currentP1Pokemon]
-    : battle.p2PokemonHP[battle.currentP2Pokemon];
-
-  const myPokemon = isPlayer1
-    ? battle.player1.team[battle.currentP1Pokemon]
-    : battle.player2.team[battle.currentP2Pokemon];
+  if (!match) return <LoadingSpinner />;
 
   return (
     <div>
-      <PokemonSprite pokemon={myPokemon} />
-      <HPBar current={myHP} max={myPokemon.stats.hp} />
+      <YourGameBoard state={match.state} youArePlayer1={isPlayer1} />
 
       {isMyTurn ? (
-        <MoveButtons
-          moves={myPokemon.moves}
-          onMove={(i, dmg) => handleMove(i, dmg)}
-        />
+        <YourGameControls onAction={takeTurn} />
       ) : (
-        <WaitingMessage opponent={
-          isPlayer1 ? battle.player2?.username : battle.player1.username
-        } />
+        <WaitingMessage opponent={opponent?.username} />
       )}
 
-      <BattleLog entries={battle.log} />
+      <MatchLog entries={match.log} />
     </div>
   );
 }
@@ -286,71 +241,75 @@ function BattleScreen({ battleId, userId }) {
 
 ---
 
-## Score Calculation (Pocket Pack Opener Formula)
+## Designing Your Score Formula
 
-This is the exact formula used in Pocket Pack Opener for reference:
+The backend only stores a single `score` number for ranking — *you* decide what
+it means. Compute it in your client however you like, then submit it. A couple of
+illustrative shapes:
 
 ```typescript
-function calculateScore(pokedex: Record<number, PokemonEntry>, stats: PlayerStats) {
+// Example A — a collection/progression game
+function computeScore(state) {
   let score = 0;
-
-  // Pokedex collection score
-  Object.values(pokedex).forEach(pokemon => {
-    if (pokemon.owned) {
-      if (pokemon.dexNumber <= 50) score += 1;          // common
-      else if (pokemon.dexNumber <= 150) score += 3;    // uncommon
-      else if (pokemon.dexNumber <= 250) score += 10;   // rare
-      else if (pokemon.dexNumber <= 350) score += 25;   // ultra rare
-      else score += 100;                                  // legendary
-    }
-  });
-
-  // Activity score
-  score += stats.gymWins * 500;
-  score += stats.eliteFourWins * 2000;
-  score += stats.battleWins * 50;
-  score += stats.dailyMissionCompletions * 100;
-
+  score += state.itemsCollected * 10;
+  score += state.levelsCleared  * 500;
+  score += state.bossesBeaten   * 2000;
+  score += state.pvpWins        * 50;
   return score;
 }
+
+// Example B — an arcade/high-score game
+function computeScore(state) {
+  return state.bestRunPoints; // simplest possible: your single best run
+}
 ```
+
+Then sync it (with whatever extra counters you want on the board's `stats`):
+
+```typescript
+submitScore(gameState.userId, computeScore(gameState), {
+  wins: gameState.wins,
+  levelsCleared: gameState.levelsCleared,
+});
+```
+
+Remember: `/score` only ever *raises* the stored value, so it's safe to call
+liberally — a stale or lower number won't clobber a better one.
 
 ---
 
 ## Aippy Prompt Template
 
-When prompting Aippy to implement this backend, use this template:
+When prompting Aippy to implement this backend, adapt and paste something like:
 
 ```
-Add a Cloudflare Worker backend to the game using these exact fetch() calls.
-The API base URL is: https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev
+Add a Cloudflare Worker backend to my game using these exact fetch() calls.
+The API base URL is: https://your-game-api.YOUR-SUBDOMAIN.workers.dev
 
-On first launch, if gameState.userId is null or undefined, call POST /register
-with the player name and save the returned userId to game state permanently.
-Never call /register again after the first time.
+On first launch, if gameState.userId is null/undefined, call POST /register with
+the player name and save the returned userId to game state permanently. Never
+call /register again after the first time.
 
-After every pack open, battle result, gym win, or daily mission complete,
-call POST /score with the current userId and full score.
-Do this in the background with a try/catch. Never block the UI for this call.
+After every score-changing event, call POST /score with the current userId, the
+new score, and a stats object of my game's counters. Do this in the background
+with try/catch. Never block the UI for it.
 
-On the leaderboard screen, call GET /leaderboard and display the returned array.
-Highlight the current player's row in gold if their userId matches.
+On the leaderboard screen, call GET /leaderboard and render the array. Highlight
+the current player's row if their userId matches.
 
-Add an async multiplayer option to the battle menu:
-- "Challenge Friend" button opens a screen to create or join a battle
-- Creating shows a battle code to share
-- Joining asks for the opponent's code
-- Once joined, both players see the battle screen
-- Poll GET /battle/state every 10 seconds using setInterval
-- Stop polling when status is "finished"
-- The move buttons are only active when it is the current player's turn
-- When not your turn show "Waiting for [opponent name]..."
+Add async multiplayer to the match menu:
+- "Create Match" calls POST /match/create and shows a code to share.
+- "Join Match" asks for a code and calls POST /match/join.
+- Once active, both players see the match screen.
+- Poll GET /match/state every 10 seconds with setInterval; stop when status is
+  "finished".
+- On my turn, compute the new game state with the game's own rules and call
+  POST /match/move with that state (and winnerUserId when the game ends).
+- Disable move controls when it isn't my turn; show "Waiting for [opponent]...".
 
-All fetch calls must be wrapped in try/catch.
-Never crash the game on network errors - just show a notification.
-Increment version number.
+Every fetch must be wrapped in try/catch and must never crash the game on a
+network error — just show a notification. Increment the version number.
 ```
 
----
-
-*Written by Lennox (@Lennox on Aippy)*
+Tailor the score/stats and match-state details to your specific game before
+pasting.

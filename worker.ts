@@ -10,9 +10,10 @@
 // This file is intentionally game-agnostic. It does not know or care what
 // your game is. It stores whatever JSON your client sends and enforces only
 // the rules that MUST live on the server (turn order, score-can-only-rise).
-// Your game's actual logic stays in your Aippy client — see ARCHITECTURE.md.
+// Your game's actual logic stays in your Aippy client — see the Architecture
+// section of the README.
 //
-// Bindings required (see SETUP.md):
+// Bindings required (see the Setup Guide in the README):
 //   env.GAME_USERS        KV namespace - player profiles
 //   env.GAME_LEADERBOARD  KV namespace - cached top-N leaderboard
 //   env.GAME_MATCHES      KV namespace - active match states
@@ -328,7 +329,7 @@ async function matchMove(req: Request, env: Env): Promise<Response> {
   if (body.userId !== whoseTurn) return err("Not your turn");
 
   // Trust the client's computed state (see "client computes, server stores" in
-  // ARCHITECTURE.md). The server only owns turn order and match status.
+  // the README). The server only owns turn order and match status.
   if (body.state !== undefined) match.state = body.state;
   if (typeof body.logEntry === "string") match.log.push(body.logEntry);
 

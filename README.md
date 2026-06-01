@@ -10,10 +10,10 @@ It doesn't assume your game is any particular genre. Card game, idle clicker,
 word game, RPG, board game — the same backend pattern works. You wire it up once
 and pick whichever multiplayer features your game needs.
 
-> The pattern here was originally proven in production by **Lennox** (@Lennox on
-> Aippy) while building *Pocket Pack Opener*, then generalized so anyone can
-> reuse it. Wherever this guide shows an example, treat it as *one* way to use
-> the backend — not the only way.
+> This whole template — the backend, the architecture, and this guide — was made
+> by **Lennox** (@Lennox on Aippy), built and proven in production on
+> *Pocket Pack Opener* and shared so anyone can reuse it. Wherever this guide
+> shows an example, treat it as *one* way to use the backend — not the only way.
 
 ---
 
@@ -332,8 +332,8 @@ thing without leaving the page. Paste it into the Cloudflare editor in
 //   env.GAME_LEADERBOARD  KV namespace - cached top-N leaderboard
 //   env.GAME_MATCHES      KV namespace - active match states
 //
-// Originally built by Lennox (@Lennox on Aippy) for Pocket Pack Opener,
-// then generalized into a reusable template for the Aippy community.
+// Made by Lennox (@Lennox on Aippy) — built and proven on Pocket Pack Opener,
+// then shared as a reusable template.
 // ============================================================================
 
 export interface Env {
@@ -1232,10 +1232,10 @@ network error — just show a notification. Increment the version number.
 
 ## 11. Credits & Contributing
 
-Originally built and proven in production by **Lennox** (@Lennox on Aippy), then
-generalized into this open template for the whole community.
+Everything here — the backend, the architecture, and this guide — was made by
+**Lennox** (@Lennox on Aippy), built and proven in production on *Pocket Pack
+Opener* and shared as a reusable template.
 
-If this helped you ship multiplayer, share what you built in the Aippy Discord —
-and feel free to adapt, extend, and pass the template along.
+If this helped you ship multiplayer, share what you built in the Aippy Discord!
 
 [↑ Back to top](#table-of-contents)

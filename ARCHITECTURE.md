@@ -1,7 +1,9 @@
 # Architecture
-### Async Multiplayer Backend for Aippy Games
 
-Written by Lennox (@Lennox on Aippy)
+### How the multiplayer backend is designed — and why
+
+This explains the design behind the template so you can adapt it confidently to
+your own game instead of treating it as a black box.
 
 ---
 
@@ -9,94 +11,160 @@ Written by Lennox (@Lennox on Aippy)
 
 The system has two parts:
 
-1. **Cloudflare Worker** - a serverless function that receives HTTP requests and handles all game logic
-2. **Cloudflare KV** - a key-value database that stores all persistent data
+1. **A Cloudflare Worker** — a serverless function that receives HTTP requests
+   and handles all backend logic.
+2. **Cloudflare KV** — a key-value database that stores all persistent data.
 
-Your Aippy game talks to the Worker using `fetch()`. The Worker reads and writes to KV. That is the entire system.
+Your Aippy game talks to the Worker using `fetch()`. The Worker reads and writes
+KV. That is the entire system.
 
 ```
-[Aippy Game]
+[Aippy Game (React/TS)]
      |
      | fetch() HTTP requests
-     |
-[Cloudflare Worker]
+     v
+[Cloudflare Worker]  (worker.ts)
      |
      | KV reads and writes
-     |
+     v
 [Cloudflare KV Namespaces]
-  PPO_USERS       - player profiles and scores
-  PPO_LEADERBOARD - top 50 cached leaderboard
-  PPO_BATTLES     - active battle states
+  GAME_USERS        - player profiles, scores, stats, friends
+  GAME_LEADERBOARD  - cached top-N leaderboard
+  GAME_MATCHES      - active match states (TTL'd)
 ```
+
+> The `GAME_` prefix is just a convention. Name your namespaces whatever you
+> like — but the names you choose must match the binding names in `worker.ts`
+> (see SETUP.md).
 
 ---
 
-## Why This Architecture
+## The Four Design Principles
 
-### No traditional server
-A traditional backend would require a VPS, a database server, authentication setup, SSL certificates, and ongoing maintenance. Cloudflare Workers handles all of that automatically. You deploy a single TypeScript file and Cloudflare runs it globally.
+### 1. No traditional server
 
-### No sign-up for players
-On first launch the game calls `/register` and gets back a UUID. That UUID is stored in Aippy game state and used for every future request. Players never create an account. There is no password. The UUID is the identity.
+A classic backend needs a VPS, a database server, auth, SSL, and ongoing
+maintenance. A Worker needs none of that — you deploy one file and Cloudflare
+runs it globally. This is what makes a backend realistic for a solo Aippy creator.
 
-This is critical for Aippy games because you want zero friction for new players. If someone has to sign up before they can play multiplayer, most of them won't.
+### 2. No sign-up — UUID as identity
 
-### KV as a game database
-Cloudflare KV stores data as key-value pairs. This is simpler than a relational database and maps well to game state:
+On first launch the game calls `/register` and gets back a UUID. That UUID is
+stored in Aippy game state and sent with every future request. Players never
+create an account; there is no password. **The UUID *is* the identity.**
 
-- One key per player: `user:UUID` -> player object as JSON
-- One key for the leaderboard: `global` -> sorted array as JSON
-- One key per battle: `battle:BATTLEID` -> battle state as JSON
+This matters because friction kills casual multiplayer. If someone must sign up
+before they can play, most won't. The trade-off: if a player loses their game
+state, they lose their identity — so for important profiles, consider showing
+the UUID somewhere the player can copy it as a backup.
 
-Reading and writing JSON objects covers everything this game needs.
+### 3. KV as a game database
 
-### Async battles over real-time
-Real-time multiplayer requires WebSockets or similar persistent connections. Aippy does not support this natively. Async turn-based battles sidestep this entirely. Each player makes their move, the state is saved, and the opponent polls for updates on a timer. This is exactly how Chess.com works and it handles any amount of players without connection issues.
+KV stores data as key/value pairs. It's simpler than a relational database and
+maps naturally onto game state:
+
+- One key per player: `user:UUID` → player object as JSON
+- One key for the leaderboard: `global` → sorted array as JSON
+- One key per match: `match:CODE` → match state as JSON
+
+Reading and writing JSON objects covers everything a typical game needs. KV is
+eventually consistent and optimized for read-heavy workloads — a perfect fit for
+"write occasionally, read often" game data.
+
+### 4. Async polling instead of real-time
+
+Real-time multiplayer needs WebSockets or similar persistent connections, which
+**Aippy does not support**. Async, poll-based multiplayer sidesteps this
+entirely: each player acts, the state is saved, and the other client polls for
+updates on a timer. This is exactly how Chess.com and Words With Friends work,
+and it scales to any number of players with zero connection management.
+
+See [MULTIPLAYER.md](MULTIPLAYER.md) for the polling strategy in depth.
+
+---
+
+## The Trust Model: "Client Computes, Server Stores"
+
+This is the most important architectural decision to understand before adapting
+the template.
+
+Your game's rules live in your **client** (the Aippy game). The Worker does
+**not** re-implement them. When a player takes a turn, the client computes the
+resulting game state and sends that state to the server. The server stores it
+and flips the turn.
+
+The server enforces only the rules that *must* be authoritative to keep
+multiplayer coherent:
+
+- **Whose turn it is.** A move is rejected unless it's the sender's turn.
+- **Match status.** You can't move in a finished or not-yet-started match.
+- **Score direction.** A submitted score can only ever rise, never fall.
+- **Identity boundaries.** You can't join your own match or friend yourself.
+
+**Why not put all the rules on the server?** Re-implementing your entire game
+engine inside the Worker would roughly double your work and keep two
+implementations in sync forever. For casual, community-driven Aippy games, the
+trade-off isn't worth it. The server guarantees *structural* fairness (turn
+order, can't-decrease score) while trusting the client for *content* (what a
+move actually does).
+
+**What this does NOT protect against:** a determined cheater editing requests
+could submit a fabricated high score or a bogus winning state. That's acceptable
+for a fun leaderboard. If you need more, see "Hardening" below.
 
 ---
 
 ## Data Models
 
-### Player Object
+The template keeps `stats` (on players) and `state`/`data` (on matches) as
+**open-ended JSON objects**, so you never have to edit `worker.ts` to store
+game-specific fields. Put whatever your game needs in them.
+
+### Player object
+
 ```json
 {
   "userId": "550e8400-e29b-41d4-a716-446655440000",
-  "username": "Trainer550E8",
+  "username": "PlayerAB12C",
   "score": 15400,
-  "gymWins": 8,
-  "eliteFourWins": 1,
-  "battleWins": 12,
-  "battleLosses": 3,
-  "packOpens": 47,
+  "stats": {
+    "wins": 12,
+    "losses": 3,
+    "levelsCleared": 8,
+    "itemsCollected": 47
+  },
   "friends": ["other-uuid-1", "other-uuid-2"],
   "createdAt": 1716134400000,
   "lastSeen": 1716220800000
 }
 ```
 
-### Leaderboard Cache
+`score` is the single number used for ranking. `stats` is your free-form bag of
+everything else — name the keys to fit your game.
+
+### Leaderboard cache
+
 ```json
 [
-  { "userId": "uuid-1", "username": "Trainer1", "score": 98000 },
-  { "userId": "uuid-2", "username": "Trainer2", "score": 87500 },
-  ...
+  { "userId": "uuid-1", "username": "TopPlayer", "score": 98000 },
+  { "userId": "uuid-2", "username": "Runner-Up", "score": 87500 }
 ]
 ```
-Stored as a sorted array of the top 50 players. Rebuilt every time a score is submitted. Fast to read because it is pre-sorted.
 
-### Battle State Object
+A sorted array of the top N players (default 50). Rebuilt on every score
+submission so reads are a single fast lookup.
+
+### Match state object
+
 ```json
 {
-  "battleId": "AB12CD34",
-  "player1": { "userId": "...", "username": "Ash", "team": [...] },
-  "player2": { "userId": "...", "username": "Gary", "team": [...] },
+  "matchId": "AB12CD34",
+  "player1": { "userId": "...", "username": "Alice", "data": { } },
+  "player2": { "userId": "...", "username": "Bob",   "data": { } },
   "status": "active",
   "turn": "player1",
-  "currentP1Pokemon": 0,
-  "currentP2Pokemon": 0,
-  "p1PokemonHP": [245, 180, 310],
-  "p2PokemonHP": [200, 0, 290],
-  "log": ["Ash's Charizard used Flamethrower for 84 damage!", "Gary's Blastoise fainted!"],
+  "state": { },
+  "log": ["Bob joined. Alice goes first.", "Alice played a card."],
   "winner": null,
   "winnerUsername": null,
   "createdAt": 1716134400000,
@@ -104,48 +172,53 @@ Stored as a sorted array of the top 50 players. Rebuilt every time a score is su
 }
 ```
 
----
-
-## Security Model
-
-### What is protected
-- Score can only ever increase, never decrease. The Worker enforces this. A player cannot submit a lower score to manipulate rankings.
-- Battle turn validation. The Worker checks it is actually your turn before processing a move. You cannot submit a move out of turn.
-- Players cannot join their own battle.
-- Players cannot add themselves as a friend.
-
-### What is not protected
-- A player could submit a fabricated high score by calling `/score` directly with a large number.
-- A player could send a very high damage value with a move to one-shot opponents.
-
-### Why this is acceptable for an Aippy game
-Aippy games are casual and community-driven. The leaderboard is for fun. Full server-side game logic would require reimplementing the entire battle engine in the Worker, which is significant complexity. The current model trusts the client for damage calculation (which uses the full type chart) and only enforces turn order and score direction on the server.
-
-If you want stronger anti-cheat, the Worker can be extended to validate damage ranges based on Pokemon stats. This is documented in `MULTIPLAYER.md`.
+- `data` (per player) — what each player brings to the match: a deck, a team, a
+  chosen color, a loadout. Set once at create/join.
+- `state` — the live, shared game state, owned and updated by the client every
+  turn. Put your board, hands, HP, scores, whatever here.
+- `turn` — `"player1"` or `"player2"`; the server enforces it.
+- `log` — human-readable history you can render as a feed.
 
 ---
 
 ## Request Flow Examples
 
-### Player opens a pack and gets a new Pokemon
-1. Game calculates new score locally
-2. Game calls `POST /score` with userId and new score
-3. Worker reads player from KV, checks score is higher, updates it
-4. Worker rebuilds leaderboard cache in KV
-5. Worker returns success
-6. Game shows updated score
+These are illustrations — your game decides *when* to call each endpoint.
 
-### Player challenges a friend to a battle
-1. Player A calls `POST /battle/create` with their team
-2. Worker creates battle state in KV, returns battleId `AB12CD34`
-3. Player A shares the code `AB12CD34` with Player B (via Discord, etc.)
-4. Player B calls `POST /battle/join` with the code and their team
-5. Worker updates battle state to `active`
-6. Both players poll `GET /battle/state?battleId=AB12CD34` every 10 seconds
-7. When it is their turn the game shows the move interface
-8. Each move is submitted via `POST /battle/move`
-9. When all of one player's Pokemon faint the battle is `finished`
+### A player improves their score
+
+1. Client computes the new score locally.
+2. Client calls `POST /score` with `userId` and the new score.
+3. Worker reads the player, keeps the score only if it's higher, saves it.
+4. Worker rebuilds the leaderboard cache.
+5. Worker returns success; the client shows the updated score.
+
+### Two players play an async match
+
+1. Player A calls `POST /match/create` with their starting `data`/`state`.
+2. Worker creates the match in KV, returns a code like `AB12CD34`.
+3. Player A shares the code with Player B (Discord, chat, anywhere).
+4. Player B calls `POST /match/join` with the code and their `data`.
+5. Worker sets the match to `active`.
+6. Both clients poll `GET /match/state?matchId=AB12CD34` on a timer.
+7. On their turn, a client computes the new `state` and calls `POST /match/move`.
+8. When a client decides the match is over, it sends `winnerUserId`; the Worker
+   marks the match `finished`.
 
 ---
 
-*Written by Lennox (@Lennox on Aippy)*
+## Hardening (Optional)
+
+The default model trusts the client. If your game needs more integrity, you can
+extend `worker.ts` without changing the overall architecture:
+
+- **Validate move bounds server-side.** Since each player's `data` is stored in
+  the match, the Worker can sanity-check a submitted `state` against it (e.g.
+  reject implausible score jumps).
+- **Rate-limit score submissions** per `userId` to blunt scripted spam.
+- **Add a lightweight shared secret** (a header the client sends) to discourage
+  casual direct-API poking. Note this is obfuscation, not real auth.
+- **Validate the winner.** Require the server to derive `winner` from `state`
+  rather than trusting a client-supplied `winnerUserId`.
+
+Each of these trades simplicity for integrity. Add only what your game warrants.

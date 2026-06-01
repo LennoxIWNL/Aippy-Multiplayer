@@ -1,210 +1,258 @@
-# Async Multiplayer Deep Dive
-### How the turn-based battle system works
+# Multiplayer Patterns
 
-Written by Lennox (@Lennox on Aippy)
+### Async turn-based matches in depth — plus the other patterns this backend supports
 
----
-
-## The Core Idea
-
-Real-time multiplayer requires a persistent connection between two players. Aippy does not support WebSockets or any persistent connection. This rules out real-time battles.
-
-Async turn-based battles work differently. There is no live connection. Instead:
-
-1. Player 1 makes a move
-2. The move is saved to the server
-3. Player 1's game shows "Waiting for opponent..."
-4. Player 2's game polls the server every 10 seconds
-5. When Player 2's poll detects a new move the game shows the updated state and prompts Player 2 to respond
-6. Player 2 makes their move
-7. Repeat until one team is fully fainted
-
-This is exactly how Chess.com, Words with Friends, and every other async game works. It requires no persistent connection and works perfectly in Aippy.
+This is the conceptual deep dive. It explains *why* async play is the right model
+for Aippy, how to implement turn-based matches for any game, and what other
+multiplayer shapes you can build on the same backend.
 
 ---
 
-## Battle Lifecycle
+## Why Async, Not Real-Time
+
+Real-time multiplayer requires a persistent connection between players
+(WebSockets, WebRTC, long-lived sockets). **Aippy supports none of these.** That
+rules out live, frame-synced play.
+
+Async play works differently — there is no live connection:
+
+1. Player 1 takes an action.
+2. The new state is saved to the server.
+3. Player 1's screen shows "Waiting for opponent…".
+4. Player 2's client polls the server on a timer.
+5. When the poll detects a change, Player 2 sees the updated state and responds.
+6. Repeat until the game ends.
+
+This is exactly how Chess.com, Words With Friends, and every other "play-by-mail"
+style game works. It needs no persistent connection and runs perfectly inside
+Aippy.
+
+**Good fits for this model:** chess/checkers, card games, word games, tic-tac-toe
+and other board games, turn-based RPG duels, "send a puzzle to a friend"
+challenges — anything where players don't need to act simultaneously.
+
+**Poor fits:** anything needing sub-second simultaneous input (platformers,
+shooters, racing). For those, async leaderboards or "ghost"/replay competition is
+the realistic alternative on Aippy.
+
+---
+
+## The Match Lifecycle
 
 ### Phase 1: Creation
 
-Player 1 selects their team and calls `POST /battle/create`. The server creates a battle object in KV with status `waiting` and returns an 8-character battle code like `AB12CD34`.
+Player 1 calls `POST /match/create` with their `data` (deck, team, color…) and an
+optional starting `state`. The server creates a match in KV with status
+`waiting` and returns an 8-character code like `AB12CD34`.
 
-Player 1 shares this code with their opponent. This happens outside the game - Discord DM, chat, wherever.
-
-The battle auto-expires after 24 hours if no opponent joins.
+Player 1 shares this code with the opponent — outside the game (Discord, chat,
+wherever). The match auto-expires after 24h if no one joins.
 
 ### Phase 2: Joining
 
-Player 2 enters the code in the game and calls `POST /battle/join` with their team. The server adds Player 2's team, sets status to `active`, and both players can now play.
+Player 2 enters the code and calls `POST /match/join` with their own `data`. The
+server adds Player 2, sets status to `active`, and play begins. Player 1 goes
+first.
 
 ### Phase 3: Turns
 
-Player 1 always goes first. On each player's turn the game shows the battle screen with the move options active. On the opponent's turn the move buttons are disabled and the game shows "Waiting for [opponent]..."
+On your turn, your client shows the active controls. On the opponent's turn,
+controls are disabled and you show "Waiting for [opponent]…". Both clients poll
+`GET /match/state` on a timer; when `lastMoveAt` changes, refresh the display.
 
-Both clients poll `GET /battle/state` every 10 seconds. When `lastMoveAt` changes the client knows a move happened and refreshes the displayed state.
+To take a turn, the client computes the new shared `state` and calls
+`POST /match/move`. The server verifies it's your turn, stores the state, and
+flips `turn` to the opponent.
 
 ### Phase 4: Resolution
 
-When all of one player's Pokemon have 0 HP the server sets `status: "finished"` and populates `winner` with the winning player's userId and `winnerUsername` with their name.
-
-The winning player's game detects `status: "finished"` on the next poll and shows the victory screen. The losing player sees the defeat screen.
+When your client determines the game is over, it includes `winnerUserId` in the
+`/match/move` call. The server sets `status: "finished"` and records `winner` /
+`winnerUsername`. Both players detect this on their next poll and show the
+win/lose screen.
 
 ### Phase 5: Cleanup
 
-Battles are stored with a 24-hour TTL in KV. They automatically delete after that. There is no manual cleanup needed.
+Matches are stored with a TTL (default 24h). They delete themselves
+automatically — no manual cleanup needed.
 
 ---
 
-## Turn Validation
+## Turn Validation (What the Server Guarantees)
 
-The server strictly enforces whose turn it is. When a move is submitted:
+The server strictly enforces whose turn it is. On every `/match/move`:
 
-1. The server reads the battle state from KV
-2. It checks the `turn` field (`"player1"` or `"player2"`)
-3. It checks whether the submitting userId matches that player slot
-4. If it is not their turn the server returns a `400` error: `"Not your turn"`
-5. If it is their turn the move is processed and `turn` flips to the other player
+1. It reads the match from KV.
+2. It checks the `turn` field (`"player1"` or `"player2"`).
+3. It checks the sender's `userId` matches that slot.
+4. If not, it returns `400 "Not your turn"`.
+5. If so, it stores the new state and flips the turn.
 
-This means even if a client bug or a bad actor sends a move out of turn it is rejected at the server. The game state stays consistent.
+So even if a client bug or a bad actor fires a move out of turn, the server
+rejects it and the shared state stays coherent. This is the one rule that
+*must* live server-side for turn-based play to be fair.
 
 ---
 
-## Damage Calculation
+## "Client Computes, Server Stores"
 
-The battle Worker uses a hybrid approach:
+The match endpoints are deliberately game-agnostic. The server never knows the
+rules of *your* game. Your client owns all the logic:
 
-**Client calculates, server stores.** The Aippy game client has the full 18-type effectiveness chart built in. When a move is used the client calculates the actual damage including STAB, type matchups, and stat differences. This damage value is sent to the server as part of the move request.
+- The client validates the move is legal under your rules.
+- The client computes the resulting `state` (the board, hands, HP, scores…).
+- The client sends that `state` to the server, which stores it verbatim.
 
-The server applies the damage to the opponent's Pokemon HP and saves the result.
+**Why?** Re-implementing your full game engine inside the Worker would double the
+work and force you to keep two copies in sync forever. For casual Aippy games the
+trade-off isn't worth it. The server owns *structure* (turn order, status); the
+client owns *content* (what a move does).
 
-**Why client-side calculation?**
-
-Reimplementing the full Pokemon type chart, base stats, and damage formula in the Worker would double the complexity of the backend for minimal benefit in a casual game. The client already has this logic working correctly.
-
-**Server fallback:**
-
-If no `damage` value is sent the server calculates a basic fallback: `Math.floor(movePower * 0.4 + random * 10)`. This ensures the battle cannot get stuck if the client forgets to send damage.
-
-**Anti-cheat consideration:**
-
-A bad actor could send `damage: 99999` to one-shot any Pokemon. For a casual Aippy game this is an acceptable trade-off. If you want to prevent this you can add damage range validation in the Worker based on the attacker's base stats, which are available from the team object stored in the battle state.
+**The trade-off:** a determined cheater could craft a `state` that favors them or
+declare themselves the winner. For a friendly game that's acceptable. If it
+isn't, see "Hardening" in [ARCHITECTURE.md](ARCHITECTURE.md) — you can validate
+the submitted `state` against each player's stored `data` server-side.
 
 ---
 
 ## Polling Strategy
 
-Both clients poll `GET /battle/state` every 10 seconds. This is the right interval for an async game because:
+Poll `GET /match/state` every ~10 seconds while a match is active. That interval:
 
-- Fast enough that the opponent's move appears within 10 seconds of being made
-- Slow enough that it does not spam the Worker with requests
-- At 10 second polling, two active players generate 12 requests per minute combined - well within Cloudflare's free tier
+- Is fast enough that the opponent's move appears within ~10s.
+- Is slow enough that it doesn't spam the Worker.
+- Generates ~12 requests/min for two active players combined — trivial against
+  the free tier's 100k/day.
 
-**Implementing the poll in Aippy:**
+Use the `lastMoveAt` timestamp as the change check — only update the UI when it
+actually changes.
 
 ```typescript
 useEffect(() => {
-  if (!activeBattleId || battleStatus === "finished") return;
+  if (!matchId || status === "finished") return;
 
   const poll = setInterval(async () => {
-    const res = await fetch(`${API}/battle/state?battleId=${activeBattleId}`);
+    const res = await fetch(`${API}/match/state?matchId=${matchId}`);
     const data = await res.json();
 
     if (data.lastMoveAt !== lastKnownMoveAt) {
       setLastKnownMoveAt(data.lastMoveAt);
-      setBattleState(data);
+      setMatchState(data);
+      if (data.status === "finished") handleMatchEnd(data);
     }
   }, 10000);
 
   return () => clearInterval(poll);
-}, [activeBattleId, battleStatus, lastKnownMoveAt]);
+}, [matchId, status, lastKnownMoveAt]);
 ```
 
-The `lastMoveAt` timestamp is the efficient check. Only update the displayed state when something actually changed.
+**Tip:** stop polling when `status === "finished"` or when the player leaves the
+match screen, so you're not making needless requests.
 
 ---
 
-## The Battle State Object in Detail
+## The Match State Object
 
 ```typescript
-interface BattleState {
-  battleId: string;            // 8 char uppercase code e.g. "AB12CD34"
+interface Match {
+  matchId: string;          // 8-char code, e.g. "AB12CD34"
   player1: {
     userId: string;
     username: string;
-    team: Pokemon[];           // full team array from game state
+    data: unknown;          // what P1 brought (deck/team/color/loadout)
   };
-  player2: {                   // null while status is "waiting"
+  player2: {                // null while status is "waiting"
     userId: string;
     username: string;
-    team: Pokemon[];
+    data: unknown;
   } | null;
   status: "waiting" | "active" | "finished";
   turn: "player1" | "player2";
-  currentP1Pokemon: number;    // index into player1.team
-  currentP2Pokemon: number;    // index into player2.team
-  p1PokemonHP: number[];       // current HP for each team slot
-  p2PokemonHP: number[];       // 0 = fainted
-  log: string[];               // human readable battle history
-  winner: string | null;       // userId of winner, null if ongoing
+  state: unknown;           // your shared game state, owned by the client
+  log: string[];            // human-readable history
+  winner: string | null;    // userId of winner, null if ongoing
   winnerUsername: string | null;
-  createdAt: number;           // unix timestamp ms
-  lastMoveAt: number;          // unix timestamp ms, changes on every move
+  createdAt: number;        // unix ms
+  lastMoveAt: number;       // unix ms, changes on every move
 }
 ```
 
-### Reading the state in your UI
+### Designing your `state`
 
-The `p1PokemonHP` and `p2PokemonHP` arrays align with the team arrays. Index 0 in HP is index 0 in team. This means you can always reconstruct the full visual state of the battle from one poll response.
+`state` is whatever your game needs. The only rule: it must be JSON-serializable
+and the full picture should be reconstructable from one poll. A few examples:
 
-```typescript
-// Is my current Pokemon alive?
-const myHP = isPlayer1
-  ? battleState.p1PokemonHP[battleState.currentP1Pokemon]
-  : battleState.p2PokemonHP[battleState.currentP2Pokemon];
+```jsonc
+// Tic-tac-toe
+{ "board": ["X", null, "O", null, "X", null, null, null, null] }
 
-// How many of my Pokemon are still alive?
-const myAliveCount = isPlayer1
-  ? battleState.p1PokemonHP.filter(hp => hp > 0).length
-  : battleState.p2PokemonHP.filter(hp => hp > 0).length;
+// A card game
+{ "p1Hand": [..], "p2Hand": [..], "discard": [..], "p1Score": 12, "p2Score": 9 }
 
-// Is it my turn?
-const isMyTurn = isPlayer1
-  ? battleState.turn === "player1"
-  : battleState.turn === "player2";
+// A turn-based RPG duel
+{ "p1HP": 240, "p2HP": 180, "p1Active": 0, "p2Active": 1, "effects": [..] }
 ```
 
----
+Keep it lean — you send and receive the whole object each turn.
 
-## Auto-faint Switching
+### Reading it in your UI
 
-When a Pokemon faints the server automatically advances to the next alive Pokemon in the team. You do not need to send a switch action.
+Because the server tells you which slot you are, derive everything from one poll:
 
-The server scans the HP array from index 0 for the first entry with HP > 0 and sets `currentP1Pokemon` or `currentP2Pokemon` to that index. It also adds a log message like `"Gary sent out Gyarados!"`.
-
-If no alive Pokemon remain the battle is set to `finished`.
-
-This means after any move that causes a faint the returned battle state already has the new active Pokemon set and ready.
+```typescript
+const isPlayer1 = match.player1.userId === myUserId;
+const isMyTurn  = isPlayer1 ? match.turn === "player1" : match.turn === "player2";
+const opponent  = isPlayer1 ? match.player2 : match.player1;
+```
 
 ---
 
 ## Forfeit
 
-If a player wants to leave a battle they call `POST /battle/forfeit`. The opponent is immediately declared the winner and the battle status is set to `finished`. The next poll by either player will detect the finished state.
+If a player wants to leave, call `POST /match/forfeit`. The opponent is
+immediately declared the winner and `status` becomes `finished`. The next poll by
+either player detects it.
 
 ---
 
-## Edge Cases Handled
+## Edge Cases the Server Handles
 
-**Player joins their own battle:** Rejected with `400 "Cannot join your own battle"`
-
-**Move submitted on finished battle:** Rejected with `400 "Battle is not active"`
-
-**Switch to a fainted Pokemon:** Rejected with `400 "That Pokemon has fainted"`
-
-**Battle code not found:** Returns `404 "Battle not found - check the code"`
-
-**Battle left in waiting state:** Auto-expires in KV after 24 hours
+- **Joining your own match** → `400 "Cannot join your own match"`
+- **Moving in a finished/waiting match** → `400 "Match is not active"`
+- **Moving when it's not your turn** → `400 "Not your turn"`
+- **Acting in a match you're not in** → `403`
+- **Unknown match code** → `404 "Match not found - check the code"`
+- **A match left waiting** → auto-expires via KV TTL
 
 ---
 
-*Written by Lennox (@Lennox on Aippy)*
+## Other Multiplayer Patterns on the Same Backend
+
+Turn-based matches are the richest example, but the same Worker + KV gives you:
+
+### Async competition (leaderboards)
+
+The simplest multiplayer: everyone plays solo, submits a `score`, and competes on
+a global or friends leaderboard (`/score`, `/leaderboard`, `/friend/list`). No
+match objects needed. Great for arcade, puzzle, and idle games.
+
+### Social / friends layer
+
+Add friends by code (`/friend/add`) and show their scores and stats side-by-side.
+Works standalone or layered onto any other pattern.
+
+### Cloud save & cross-device profiles
+
+Because the player profile lives in KV keyed by UUID, the `score`/`stats` blob
+doubles as cloud save. Surface the UUID so a player can restore on a new device.
+
+### Shared persistent world (advanced)
+
+Treat a single KV key as a shared object that many players read and append to —
+a guestbook, a co-op build, a shared event tally, a "global goal" bar. Use the
+match endpoints' "client computes, server stores" idea, or add a small custom
+route. Be mindful that KV is eventually consistent, so it suits append-style or
+last-writer-wins shared state rather than strict simultaneous editing.
+
+Pick the smallest pattern that delivers the social hook your game needs — you can
+always add more later without redeploying anything but `worker.ts`.

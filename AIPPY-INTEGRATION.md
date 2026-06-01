@@ -1,54 +1,56 @@
 # Aippy Integration Guide
+
 ### How to wire the Cloudflare backend into your Aippy game
 
-Written by Lennox (@Lennox on Aippy)
+This shows exactly how to connect the backend to any Aippy game. The patterns are
+generic — adapt the field names to whatever your game already stores.
 
 ---
 
 ## Overview
 
-Aippy games run in a React/TypeScript environment. The `fetch()` API works fully. This means you can call your Cloudflare Worker from any Aippy game using standard HTTP requests.
-
-This guide shows you exactly how to integrate the backend. The patterns here are based on real implementation in Pocket Pack Opener.
+Aippy games run in a React/TypeScript environment where `fetch()` works fully.
+That means you can call your Cloudflare Worker with standard HTTP requests from
+anywhere in your game.
 
 ---
 
 ## Important Aippy Constraints
 
-Before starting, understand these Aippy-specific limitations:
+Before you start, keep these Aippy-specific limits in mind:
 
-- **No localStorage or sessionStorage.** You cannot use browser storage. All persistent data must go through Aippy's own game state system or your Cloudflare backend.
-- **No WebSockets.** Real-time connections are not supported. Use the async polling pattern described in `MULTIPLAYER.md`.
-- **fetch() works.** All standard HTTP calls to external APIs work fully.
-- **Game state persists.** Aippy saves your React state between sessions. Store the `userId` in game state and it will be there when the player returns.
+- **No `localStorage` or `sessionStorage`.** You can't use browser storage. All
+  persistent data goes through Aippy's own game-state system or your backend.
+- **No WebSockets.** Real-time connections aren't supported — use the async
+  polling pattern from [MULTIPLAYER.md](MULTIPLAYER.md).
+- **`fetch()` works.** All standard HTTP calls to external APIs work.
+- **Game state persists.** Aippy saves your React state between sessions. Store
+  the `userId` in game state and it'll be there when the player returns.
 
 ---
 
-## Step 1 - Store Your API URL
+## Step 1 — Store Your API URL
 
-At the top of your game code, define a constant for your Worker URL:
+At the top of your game code, define your Worker URL once:
 
 ```typescript
-const API = "https://pocket-pack-opener-api.YOUR-SUBDOMAIN.workers.dev";
+const API = "https://your-game-api.YOUR-SUBDOMAIN.workers.dev";
 ```
 
-Replace `YOUR-SUBDOMAIN` with your actual Cloudflare subdomain.
+Replace with your actual Worker URL from SETUP.md.
 
 ---
 
-## Step 2 - Player Registration
+## Step 2 — Player Registration
 
-On the very first launch, register the player and save their userId. Never register again after the first time.
+On the very first launch, register the player and save their `userId`. Never
+register again after that.
 
 ```typescript
-// In your game state, include:
-// userId: string | null  (starts as null)
+// In your game state, include: userId: string | null  (starts as null)
 
-// On game load, check if userId exists:
 useEffect(() => {
-  if (!gameState.userId) {
-    registerPlayer();
-  }
+  if (!gameState.userId) registerPlayer();
 }, []);
 
 async function registerPlayer() {
@@ -56,33 +58,30 @@ async function registerPlayer() {
     const res = await fetch(`${API}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: gameState.playerName || undefined })
+      body: JSON.stringify({ username: gameState.playerName || undefined }),
     });
     const data = await res.json();
 
     if (data.success) {
-      // Save to Aippy game state permanently
-      setGameState(prev => ({
-        ...prev,
-        userId: data.userId,
-        username: data.username
-      }));
+      setGameState(prev => ({ ...prev, userId: data.userId, username: data.username }));
     }
   } catch (err) {
-    // Network unavailable - game still works offline
-    // Player will register on next session
+    // Network unavailable — the game still works offline.
+    // Registration will retry on the next session.
     console.error("Registration failed:", err);
   }
 }
 ```
 
-**Critical:** Always wrap in try/catch. If the player has no internet the game must still work. Registration will happen on the next session.
+**Critical:** always wrap in try/catch. If the player has no internet, the game
+must still run; registration happens next session.
 
 ---
 
-## Step 3 - Score Submission
+## Step 3 — Score Submission
 
-Call this after any event that changes the player's score: pack open, battle win, gym clear, daily mission complete.
+Call this after any event that changes the player's score (level clear, win,
+purchase, milestone — whatever scoring means in your game).
 
 ```typescript
 async function submitScore() {
@@ -95,25 +94,27 @@ async function submitScore() {
       body: JSON.stringify({
         userId: gameState.userId,
         score: gameState.score,
-        gymWins: gameState.gymWins,
-        eliteFourWins: gameState.eliteFourWins,
-        battleWins: gameState.battleWins,
-        battleLosses: gameState.battleLosses,
-        packOpens: gameState.packOpens
-      })
+        // `stats` is free-form — send whatever your game tracks:
+        stats: {
+          wins: gameState.wins,
+          losses: gameState.losses,
+          levelsCleared: gameState.levelsCleared,
+        },
+      }),
     });
   } catch (err) {
-    // Silent fail - score will sync next time
+    // Silent fail — it'll sync next time.
     console.error("Score submit failed:", err);
   }
 }
 ```
 
-Do not await this in the UI flow. Fire it in the background so it does not slow down the game.
+Don't `await` this in the UI flow — fire it in the background so it never slows
+the game.
 
 ---
 
-## Step 4 - Leaderboard
+## Step 4 — Leaderboard
 
 Load this when the player opens the leaderboard screen.
 
@@ -122,65 +123,49 @@ async function loadLeaderboard() {
   try {
     const res = await fetch(`${API}/leaderboard`);
     const data = await res.json();
-    setLeaderboard(data.leaderboard);
+    setLeaderboard(data.leaderboard); // [{ userId, username, score }]
   } catch (err) {
     console.error("Leaderboard load failed:", err);
     setLeaderboard([]);
   }
 }
-
-// Rendering:
-// leaderboard is an array of { userId, username, score }
-// Highlight the current player's entry with a different colour
+// When rendering, highlight the row where userId === gameState.userId.
 ```
 
 ---
 
-## Step 5 - Friend Code Display
+## Step 5 — Friend Code Display
 
-Show the player their own userId as a friend code. Display only the first 8 characters to keep it readable.
+Show the player their own `userId` as a friend code. You can display a short
+prefix for readability, but sharing/adding needs the full UUID.
 
 ```typescript
-// In your profile or settings screen:
-const friendCode = gameState.userId?.slice(0, 8).toUpperCase() ?? "Not registered";
+// In your profile/settings screen:
+const friendCode = gameState.userId ?? "Not registered";
 
-// Display:
-// Your friend code: AB12CD34
-// Share this with friends so they can add you
+// Show the full UUID labeled "Your Friend Code" with a copy button.
+// A UUID like 550e8400-e29b-41d4-a716-446655440000 is unambiguous to paste.
 ```
 
 ---
 
-## Step 6 - Adding a Friend
+## Step 6 — Adding a Friend
 
 ```typescript
-async function addFriend(friendCode: string) {
-  // Friend code is the first 8 chars of userId
-  // We need the full UUID - this only works if they entered the full UUID
-  // OR you display full UUIDs and let players copy them
-
-  // For a better UX, display and share full UUIDs but label them "Friend Code"
-  // A UUID like 550e8400-e29b-41d4-a716-446655440000 is unambiguous
-
+async function addFriend(friendId: string) {
   if (!gameState.userId) return;
 
   try {
     const res = await fetch(`${API}/friend/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: gameState.userId,
-        friendId: friendCode.trim()
-      })
+      body: JSON.stringify({ userId: gameState.userId, friendId: friendId.trim() }),
     });
     const data = await res.json();
 
-    if (data.success) {
-      showNotification(`Added ${data.friendUsername} as a friend!`);
-    } else {
-      showNotification(data.error || "Could not add friend");
-    }
-  } catch (err) {
+    if (data.success) showNotification(`Added ${data.friendUsername} as a friend!`);
+    else showNotification(data.error || "Could not add friend");
+  } catch {
     showNotification("Network error - try again");
   }
 }
@@ -188,185 +173,149 @@ async function addFriend(friendCode: string) {
 
 ---
 
-## Step 7 - Friends Leaderboard
+## Step 7 — Friends Leaderboard
 
 ```typescript
 async function loadFriendLeaderboard() {
   if (!gameState.userId) return;
-
   try {
     const res = await fetch(`${API}/friend/list?userId=${gameState.userId}`);
     const data = await res.json();
-    setFriendList(data.friends);
-  } catch (err) {
+    setFriendList(data.friends); // sorted by score desc; each: { userId, username, score, stats, lastSeen }
+  } catch {
     setFriendList([]);
   }
 }
-
-// data.friends is sorted by score descending
-// Each entry: { userId, username, score, gymWins, battleWins, lastSeen }
 ```
 
 ---
 
-## Step 8 - Creating an Async Battle
+## Step 8 — Creating an Async Match
+
+`data` is whatever this player brings (a deck, a team, a color). `state` is your
+optional starting shared state.
 
 ```typescript
-async function createBattle() {
-  if (!gameState.userId || gameState.team.length === 0) return;
+async function createMatch() {
+  if (!gameState.userId) return;
 
   try {
-    const res = await fetch(`${API}/battle/create`, {
+    const res = await fetch(`${API}/match/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: gameState.userId,
         username: gameState.username,
-        team: gameState.team  // your full team array from game state
-      })
+        data: gameState.loadout,            // your per-player setup
+        state: buildInitialMatchState(),    // your starting board/state
+      }),
     });
     const data = await res.json();
 
     if (data.success) {
-      setActiveBattleId(data.battleId);
-      showBattleCode(data.battleId);
-      // Show: "Your battle code is AB12CD34 - share this with your opponent"
-      startPolling(data.battleId);
+      setActiveMatchId(data.matchId);
+      showMatchCode(data.matchId); // "Your code is AB12CD34 - share it with your opponent"
+      startPolling(data.matchId);
     }
-  } catch (err) {
-    showNotification("Could not create battle - check connection");
+  } catch {
+    showNotification("Could not create match - check connection");
   }
 }
 ```
 
 ---
 
-## Step 9 - Joining a Battle
+## Step 9 — Joining a Match
 
 ```typescript
-async function joinBattle(battleCode: string) {
-  if (!gameState.userId || gameState.team.length === 0) return;
+async function joinMatch(code: string) {
+  if (!gameState.userId) return;
 
   try {
-    const res = await fetch(`${API}/battle/join`, {
+    const res = await fetch(`${API}/match/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        battleId: battleCode.trim().toUpperCase(),
+        matchId: code.trim().toUpperCase(),
         userId: gameState.userId,
         username: gameState.username,
-        team: gameState.team
-      })
+        data: gameState.loadout,
+      }),
     });
     const data = await res.json();
 
     if (data.success) {
-      setActiveBattleId(battleCode);
-      setBattleState(data.battle);
-      startPolling(battleCode);
+      setActiveMatchId(code);
+      setMatchState(data.match);
+      startPolling(code);
     } else {
-      showNotification(data.error || "Could not join battle");
+      showNotification(data.error || "Could not join match");
     }
-  } catch (err) {
-    showNotification("Could not join battle - check connection");
+  } catch {
+    showNotification("Could not join match - check connection");
   }
 }
 ```
 
 ---
 
-## Step 10 - Polling for Battle Updates
+## Step 10 — Polling for Match Updates
 
 ```typescript
-const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-function startPolling(battleId: string) {
-  if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+function startPolling(matchId: string) {
+  if (pollRef.current) clearInterval(pollRef.current);
 
-  pollIntervalRef.current = setInterval(async () => {
+  pollRef.current = setInterval(async () => {
     try {
-      const res = await fetch(`${API}/battle/state?battleId=${battleId}`);
+      const res = await fetch(`${API}/match/state?matchId=${matchId}`);
       const data = await res.json();
 
-      setBattleState(prev => {
-        // Only update if something changed
-        if (data.lastMoveAt !== prev?.lastMoveAt) {
-          return data;
-        }
-        return prev;
-      });
+      setMatchState(prev => (data.lastMoveAt !== prev?.lastMoveAt ? data : prev));
 
-      // Stop polling when battle is finished
       if (data.status === "finished") {
-        clearInterval(pollIntervalRef.current!);
-        handleBattleEnd(data);
+        clearInterval(pollRef.current!);
+        handleMatchEnd(data);
       }
-    } catch (err) {
-      // Network blip - keep polling
+    } catch {
+      // Network blip — keep polling.
     }
   }, 10000); // every 10 seconds
 }
 
-// Stop polling when component unmounts or player leaves battle screen
-useEffect(() => {
-  return () => {
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-  };
-}, []);
+// Stop polling on unmount / leaving the match screen.
+useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 ```
 
 ---
 
-## Step 11 - Submitting a Move
+## Step 11 — Submitting a Turn
+
+Your client computes the new shared `state`, then sends it. Pass `winnerUserId`
+when the game is over.
 
 ```typescript
-async function submitMove(moveIndex: number, calculatedDamage: number) {
-  if (!activeBattleId || !gameState.userId) return;
+async function submitTurn(nextState: unknown, logEntry: string, winnerUserId?: string) {
+  if (!activeMatchId || !gameState.userId) return;
 
   try {
-    const res = await fetch(`${API}/battle/move`, {
+    const res = await fetch(`${API}/match/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        battleId: activeBattleId,
+        matchId: activeMatchId,
         userId: gameState.userId,
-        action: "move",
-        moveIndex: moveIndex,
-        damage: calculatedDamage  // from your type chart damage calculation
-      })
+        state: nextState,
+        logEntry,
+        winnerUserId: winnerUserId ?? null,
+      }),
     });
     const data = await res.json();
 
-    if (data.success) {
-      setBattleState(data.battle);
-    } else {
-      showNotification(data.error || "Move failed");
-    }
-  } catch (err) {
-    showNotification("Network error - try again");
-  }
-}
-
-async function submitSwitch(teamIndex: number) {
-  if (!activeBattleId || !gameState.userId) return;
-
-  try {
-    const res = await fetch(`${API}/battle/move`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        battleId: activeBattleId,
-        userId: gameState.userId,
-        action: "switch",
-        switchTo: teamIndex
-      })
-    });
-    const data = await res.json();
-
-    if (data.success) {
-      setBattleState(data.battle);
-    }
-  } catch (err) {
+    if (data.success) setMatchState(data.match);
+    else showNotification(data.error || "Move failed"); // e.g. "Not your turn"
+  } catch {
     showNotification("Network error - try again");
   }
 }
@@ -374,33 +323,25 @@ async function submitSwitch(teamIndex: number) {
 
 ---
 
-## Step 12 - Handling Battle End
+## Step 12 — Handling Match End
 
 ```typescript
-function handleBattleEnd(battle: BattleState) {
-  const iWon = battle.winner === gameState.userId;
+function handleMatchEnd(match) {
+  const iWon = match.winner === gameState.userId;
 
-  if (iWon) {
-    // Award coins and score, update game state
-    setGameState(prev => ({
-      ...prev,
-      coins: prev.coins + 1000,
-      battleWins: prev.battleWins + 1,
-      score: prev.score + 500
-    }));
-    submitScore(); // sync to backend
-    showVictoryScreen(battle.winnerUsername);
-  } else {
-    setGameState(prev => ({
-      ...prev,
-      battleLosses: prev.battleLosses + 1
-    }));
-    submitScore();
-    showDefeatScreen(battle.winnerUsername);
-  }
+  setGameState(prev => ({
+    ...prev,
+    wins: prev.wins + (iWon ? 1 : 0),
+    losses: prev.losses + (iWon ? 0 : 1),
+    score: prev.score + (iWon ? 500 : 0),
+  }));
+  submitScore(); // sync the new totals to the backend
 
-  setActiveBattleId(null);
-  setBattleState(null);
+  if (iWon) showVictoryScreen(match.winnerUsername);
+  else showDefeatScreen(match.winnerUsername);
+
+  setActiveMatchId(null);
+  setMatchState(null);
 }
 ```
 
@@ -408,15 +349,17 @@ function handleBattleEnd(battle: BattleState) {
 
 ## Prompting Tips for Aippy
 
-When you paste this into Aippy via a prompt, be specific:
+When you ask Aippy to build this in, be specific:
 
-- Tell it the full API URL explicitly
-- Tell it which game state fields to read from and write to
-- Specify that polling must use `setInterval` not `setTimeout`
-- Specify that all fetch calls must be wrapped in try/catch
-- Tell it to never block the UI while waiting for API responses
-- Specify that userId must be saved to Aippy game state on registration and never regenerated
+- Give the full API URL explicitly.
+- Tell it which game-state fields to read from and write to.
+- Say that polling must use `setInterval`, not `setTimeout`.
+- Say that **every** `fetch` must be wrapped in try/catch and must never crash
+  the game on a network error — just show a notification.
+- Say that `userId` must be saved to game state on registration and **never**
+  regenerated.
+- Say that match-move buttons are enabled only on the player's turn, and show a
+  "Waiting for [opponent]…" state otherwise.
 
----
-
-*Written by Lennox (@Lennox on Aippy)*
+See [EXAMPLE-CODE.md](EXAMPLE-CODE.md) for a ready-to-paste helper module and a
+copy-paste Aippy prompt template.

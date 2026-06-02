@@ -45,7 +45,7 @@ backend. The principle is:
 
 That's it. No game servers to run, no databases to administer, no login screens.
 This repo implements that principle with **Cloudflare Workers** + **Cloudflare
-KV**, and ships a single ready-to-deploy `worker.ts` (also reproduced inline in
+KV**, and ships a single ready-to-deploy `worker.js` (also reproduced inline in
 [section 6](#6-the-worker-code) so you never have to leave this page).
 
 [↑ Back to top](#table-of-contents)
@@ -105,7 +105,7 @@ KV. That is the entire system.
      |
      | fetch() HTTP requests
      v
-[Cloudflare Worker]  (worker.ts)
+[Cloudflare Worker]  (worker.js)
      |
      | KV reads and writes
      v
@@ -116,7 +116,7 @@ KV. That is the entire system.
 ```
 
 > The `GAME_` prefix is just a convention. Name your namespaces whatever you
-> like — but the names you choose must match the binding names in `worker.ts`
+> like — but the names you choose must match the binding names in `worker.js`
 > (see the [Setup Guide](#5-setup-guide)).
 
 ### The Four Design Principles
@@ -177,7 +177,7 @@ for a fun leaderboard. If you need more, see [Hardening](#hardening-optional).
 ### Data Models
 
 The template keeps `stats` (on players) and `state`/`data` (on matches) as
-**open-ended JSON objects**, so you never have to edit `worker.ts` to store
+**open-ended JSON objects**, so you never have to edit `worker.js` to store
 game-specific fields.
 
 **Player object**
@@ -219,7 +219,7 @@ everything else — name the keys to fit your game.
 ### Hardening (Optional)
 
 The default model trusts the client. If your game needs more integrity, extend
-`worker.ts` without changing the overall architecture:
+`worker.js` without changing the overall architecture:
 
 - **Validate move bounds server-side** against each player's stored `data`.
 - **Rate-limit score submissions** per `userId` to blunt scripted spam.
@@ -235,16 +235,16 @@ Add only what your game warrants.
 
 ## 5. Setup Guide
 
-Deploying `worker.ts` to Cloudflare takes about 10 minutes and needs no coding
+Deploying `worker.js` to Cloudflare takes about 10 minutes and needs no coding
 beyond copy-paste.
 
 > **Naming:** the template uses KV binding names `GAME_USERS`,
 > `GAME_LEADERBOARD`, `GAME_MATCHES`, and an example Worker name `your-game-api`.
 > Rename any of these — just keep the KV **binding names** in sync with the names
-> referenced in `worker.ts`.
+> referenced in `worker.js`.
 
 **What you need:** a free [Cloudflare account](https://dash.cloudflare.com), the
-`worker.ts` file from this repo, ~10 minutes.
+`worker.js` file from this repo, ~10 minutes.
 
 **Step 1 — Create a Cloudflare account.** Sign up free at
 [dash.cloudflare.com](https://dash.cloudflare.com). No credit card. The free tier
@@ -260,9 +260,9 @@ Worker**. Name it e.g. `your-game-api` (your URL becomes
 the placeholder.
 
 **Step 4 — Add the Worker code.** Click **Edit code**, select-all and delete the
-placeholder, paste the entire contents of `worker.ts` (see
+placeholder, paste the entire contents of `worker.js` (see
 [section 6](#6-the-worker-code)), then **Deploy**. If you see a syntax error,
-make sure the file tab shows `worker.ts` (TypeScript), not `worker.js`.
+make sure the file tab shows `worker.js`, not `worker.ts`.
 
 **Step 5 — Bind the KV namespaces.** On the Worker page: **Settings → Variables
 (or Bindings) → KV Namespace Bindings → Add binding**. Add three, mapping each
@@ -287,7 +287,7 @@ paste into Aippy (see [section 9](#9-integrating-with-your-aippy-game)).
 
 **Common issues**
 
-- *Syntax error on deploy* — file tab must show `worker.ts`, not `.js`.
+- *Syntax error on deploy* — file tab must show `worker.js`, not `.js`.
 - *KV binding errors* — binding variable names must be exactly `GAME_USERS`,
   `GAME_LEADERBOARD`, `GAME_MATCHES` (or whatever you renamed in the code).
 - *CORS errors* — the Worker sends permissive CORS on every response; confirm the
@@ -298,7 +298,7 @@ paste into Aippy (see [section 9](#9-integrating-with-your-aippy-game)).
 **Going further** — attach a custom domain via the Worker's **Triggers**; develop
 locally with `wrangler dev` against a `wrangler.toml` declaring the same KV
 bindings; tune the `LEADERBOARD_SIZE` and `MATCH_TTL_SECONDS` constants at the top
-of `worker.ts`.
+of `worker.js`.
 
 [↑ Back to top](#table-of-contents)
 
@@ -306,14 +306,14 @@ of `worker.ts`.
 
 ## 6. The Worker Code
 
-This is the complete, game-agnostic backend. It's also saved as `worker.ts` in
+This is the complete, game-agnostic backend. It's also saved as `worker.js` in
 this repo for easy copying — but it's reproduced here so you can read the whole
 thing without leaving the page. Paste it into the Cloudflare editor in
 [Setup Step 4](#5-setup-guide).
 
-```typescript
+```javascript
 // ============================================================================
-// worker.ts — Generic async multiplayer backend for Aippy games
+// worker.js — Generic async multiplayer backend for Aippy games
 // ----------------------------------------------------------------------------
 // A single-file Cloudflare Worker that gives ANY Aippy game:
 //   - No-signup player accounts (UUID identity)

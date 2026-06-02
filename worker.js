@@ -1,5 +1,5 @@
 // ============================================================================
-// worker.ts — Generic async multiplayer backend for Aippy games
+// worker.js — Generic async multiplayer backend for Aippy games
 // ----------------------------------------------------------------------------
 // A single-file Cloudflare Worker that gives ANY Aippy game:
 //   - No-signup player accounts (UUID identity)
@@ -22,17 +22,11 @@
 // then shared as a reusable template.
 // ============================================================================
 
-export interface Env {
-  GAME_USERS: KVNamespace;
-  GAME_LEADERBOARD: KVNamespace;
-  GAME_MATCHES: KVNamespace;
-}
-
 // ---------------------------------------------------------------------------
 // Config — tweak these to taste, they are the only "knobs" in the file.
 // ---------------------------------------------------------------------------
-const LEADERBOARD_SIZE = 50;            // how many players the global board keeps
-const MATCH_TTL_SECONDS = 60 * 60 * 24; // matches auto-delete after 24h of inactivity
+const LEADERBOARD_SIZE = 50;
+const MATCH_TTL_SECONDS = 60 * 60 * 24; // matches auto-delete after 24h
 
 // ---------------------------------------------------------------------------
 // CORS — Aippy calls this Worker from the browser, so every response needs
@@ -44,72 +38,32 @@ const CORS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-function json(data: unknown, status = 200): Response {
+function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json", ...CORS },
   });
 }
 
-function err(message: string, status = 400): Response {
+function err(message, status = 400) {
   return json({ success: false, error: message }, status);
-}
-
-// ---------------------------------------------------------------------------
-// Data shapes. `stats` and match `state` are deliberately open-ended objects
-// so any game can store whatever it needs without changing this file.
-// ---------------------------------------------------------------------------
-interface Player {
-  userId: string;
-  username: string;
-  score: number;
-  stats: Record<string, number>; // e.g. { wins: 3, losses: 1, levelsCleared: 8 }
-  friends: string[];
-  createdAt: number;
-  lastSeen: number;
-}
-
-interface LeaderboardEntry {
-  userId: string;
-  username: string;
-  score: number;
-}
-
-interface MatchPlayer {
-  userId: string;
-  username: string;
-  data: unknown; // whatever each player brings to the match (a deck, a team, a color)
-}
-
-interface Match {
-  matchId: string;
-  player1: MatchPlayer;
-  player2: MatchPlayer | null;
-  status: "waiting" | "active" | "finished";
-  turn: "player1" | "player2";
-  state: unknown;               // arbitrary game state, owned by the client
-  log: string[];                // human-readable history
-  winner: string | null;        // userId of winner
-  winnerUsername: string | null;
-  createdAt: number;
-  lastMoveAt: number;
 }
 
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
-function randomName(): string {
+function randomName() {
   return "Player" + Math.random().toString(36).slice(2, 7).toUpperCase();
 }
 
-function matchCode(): string {
+function matchCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous chars
   let code = "";
   for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
   return code;
 }
 
-async function readJson(req: Request): Promise<any> {
+async function readJson(req) {
   try {
     return await req.json();
   } catch {
@@ -118,13 +72,12 @@ async function readJson(req: Request): Promise<any> {
 }
 
 // ---------------------------------------------------------------------------
-// Leaderboard cache: recomputed whenever a score is submitted so reads are
-// a single fast KV get. For large games you'd page this; for an Aippy game a
-// single top-N array is plenty.
+// Leaderboard cache: recomputed on every score submission so reads are a
+// single fast KV get.
 // ---------------------------------------------------------------------------
-async function rebuildLeaderboard(env: Env, player: Player): Promise<void> {
+async function rebuildLeaderboard(env, player) {
   const raw = await env.GAME_LEADERBOARD.get("global");
-  let board: LeaderboardEntry[] = raw ? JSON.parse(raw) : [];
+  let board = raw ? JSON.parse(raw) : [];
 
   board = board.filter((e) => e.userId !== player.userId);
   board.push({ userId: player.userId, username: player.username, score: player.score });
@@ -139,12 +92,12 @@ async function rebuildLeaderboard(env: Env, player: Player): Promise<void> {
 // ===========================================================================
 
 // POST /register  ->  { success, userId, username }
-async function register(req: Request, env: Env): Promise<Response> {
+async function register(req, env) {
   const body = await readJson(req);
   const userId = crypto.randomUUID();
   const username = (body.username && String(body.username).slice(0, 24)) || randomName();
 
-  const player: Player = {
+  const player = {
     userId,
     username,
     score: 0,
@@ -159,7 +112,7 @@ async function register(req: Request, env: Env): Promise<Response> {
 }
 
 // GET /user?userId=...  ->  full player object
-async function getUser(url: URL, env: Env): Promise<Response> {
+async function getUser(url, env) {
   const userId = url.searchParams.get("userId");
   if (!userId) return err("userId required");
 
@@ -169,16 +122,15 @@ async function getUser(url: URL, env: Env): Promise<Response> {
 }
 
 // POST /score  ->  { success, score }
-// Body: { userId, score, stats?: {...}, username? }
 // Score is clamped so it can only ever rise. stats are shallow-merged.
-async function submitScore(req: Request, env: Env): Promise<Response> {
+async function submitScore(req, env) {
   const body = await readJson(req);
   if (!body.userId) return err("userId required");
 
   const raw = await env.GAME_USERS.get(`user:${body.userId}`);
   if (!raw) return err("User not found", 404);
 
-  const player: Player = JSON.parse(raw);
+  const player = JSON.parse(raw);
 
   if (typeof body.score === "number" && body.score > player.score) {
     player.score = body.score;
@@ -198,13 +150,13 @@ async function submitScore(req: Request, env: Env): Promise<Response> {
 }
 
 // GET /leaderboard  ->  { leaderboard: [...] }
-async function leaderboard(env: Env): Promise<Response> {
+async function leaderboard(env) {
   const raw = await env.GAME_LEADERBOARD.get("global");
   return json({ leaderboard: raw ? JSON.parse(raw) : [] });
 }
 
 // POST /friend/add  ->  { success, friendUsername }
-async function addFriend(req: Request, env: Env): Promise<Response> {
+async function addFriend(req, env) {
   const body = await readJson(req);
   if (!body.userId || !body.friendId) return err("userId and friendId required");
   if (body.userId === body.friendId) return err("You cannot add yourself");
@@ -215,8 +167,8 @@ async function addFriend(req: Request, env: Env): Promise<Response> {
   const friendRaw = await env.GAME_USERS.get(`user:${body.friendId}`);
   if (!friendRaw) return err("Friend ID not found - check the code and try again", 404);
 
-  const me: Player = JSON.parse(meRaw);
-  const friend: Player = JSON.parse(friendRaw);
+  const me = JSON.parse(meRaw);
+  const friend = JSON.parse(friendRaw);
 
   if (!me.friends.includes(friend.userId)) {
     me.friends.push(friend.userId);
@@ -227,20 +179,20 @@ async function addFriend(req: Request, env: Env): Promise<Response> {
 }
 
 // GET /friend/list?userId=...  ->  { friends: [...] } sorted by score desc
-async function friendList(url: URL, env: Env): Promise<Response> {
+async function friendList(url, env) {
   const userId = url.searchParams.get("userId");
   if (!userId) return err("userId required");
 
   const raw = await env.GAME_USERS.get(`user:${userId}`);
   if (!raw) return err("User not found", 404);
 
-  const me: Player = JSON.parse(raw);
-  const friends: any[] = [];
+  const me = JSON.parse(raw);
+  const friends = [];
 
   for (const fid of me.friends) {
     const fRaw = await env.GAME_USERS.get(`user:${fid}`);
     if (!fRaw) continue;
-    const f: Player = JSON.parse(fRaw);
+    const f = JSON.parse(fRaw);
     friends.push({
       userId: f.userId,
       username: f.username,
@@ -255,13 +207,12 @@ async function friendList(url: URL, env: Env): Promise<Response> {
 }
 
 // POST /match/create  ->  { success, matchId }
-// Body: { userId, username, data?, state? }
-async function matchCreate(req: Request, env: Env): Promise<Response> {
+async function matchCreate(req, env) {
   const body = await readJson(req);
   if (!body.userId) return err("userId required");
 
   const matchId = matchCode();
-  const match: Match = {
+  const match = {
     matchId,
     player1: { userId: body.userId, username: body.username || "Player 1", data: body.data ?? null },
     player2: null,
@@ -282,21 +233,19 @@ async function matchCreate(req: Request, env: Env): Promise<Response> {
 }
 
 // POST /match/join  ->  { success, match }
-// Body: { matchId, userId, username, data?, state? }
-async function matchJoin(req: Request, env: Env): Promise<Response> {
+async function matchJoin(req, env) {
   const body = await readJson(req);
   if (!body.matchId || !body.userId) return err("matchId and userId required");
 
   const raw = await env.GAME_MATCHES.get(`match:${body.matchId}`);
   if (!raw) return err("Match not found - check the code", 404);
 
-  const match: Match = JSON.parse(raw);
+  const match = JSON.parse(raw);
   if (match.status !== "waiting") return err("This match has already started");
   if (match.player1.userId === body.userId) return err("Cannot join your own match");
 
   match.player2 = { userId: body.userId, username: body.username || "Player 2", data: body.data ?? null };
   match.status = "active";
-  // Let the joiner seed the starting state if it wasn't set at creation.
   if (match.state == null && body.state != null) match.state = body.state;
   match.log.push(`${match.player2.username} joined. ${match.player1.username} goes first.`);
   match.lastMoveAt = Date.now();
@@ -310,15 +259,14 @@ async function matchJoin(req: Request, env: Env): Promise<Response> {
 // POST /match/move  ->  { success, match }
 // The server's ONLY job here is to enforce turn order. The client computes the
 // resulting game state and sends it back; the server stores it and flips turn.
-// Body: { matchId, userId, state, logEntry?, winnerUserId? }
-async function matchMove(req: Request, env: Env): Promise<Response> {
+async function matchMove(req, env) {
   const body = await readJson(req);
   if (!body.matchId || !body.userId) return err("matchId and userId required");
 
   const raw = await env.GAME_MATCHES.get(`match:${body.matchId}`);
   if (!raw) return err("Match not found", 404);
 
-  const match: Match = JSON.parse(raw);
+  const match = JSON.parse(raw);
   if (match.status !== "active") return err("Match is not active");
 
   const isP1 = match.player1.userId === body.userId;
@@ -328,8 +276,6 @@ async function matchMove(req: Request, env: Env): Promise<Response> {
   const whoseTurn = match.turn === "player1" ? match.player1.userId : match.player2?.userId;
   if (body.userId !== whoseTurn) return err("Not your turn");
 
-  // Trust the client's computed state (see "client computes, server stores" in
-  // the README). The server only owns turn order and match status.
   if (body.state !== undefined) match.state = body.state;
   if (typeof body.logEntry === "string") match.log.push(body.logEntry);
 
@@ -353,7 +299,7 @@ async function matchMove(req: Request, env: Env): Promise<Response> {
 }
 
 // GET /match/state?matchId=...  ->  full match object
-async function matchState(url: URL, env: Env): Promise<Response> {
+async function matchState(url, env) {
   const matchId = url.searchParams.get("matchId");
   if (!matchId) return err("matchId required");
 
@@ -363,14 +309,14 @@ async function matchState(url: URL, env: Env): Promise<Response> {
 }
 
 // POST /match/forfeit  ->  { success, match }
-async function matchForfeit(req: Request, env: Env): Promise<Response> {
+async function matchForfeit(req, env) {
   const body = await readJson(req);
   if (!body.matchId || !body.userId) return err("matchId and userId required");
 
   const raw = await env.GAME_MATCHES.get(`match:${body.matchId}`);
   if (!raw) return err("Match not found", 404);
 
-  const match: Match = JSON.parse(raw);
+  const match = JSON.parse(raw);
   if (match.status === "finished") return json({ success: true, match });
 
   const isP1 = match.player1.userId === body.userId;
@@ -392,7 +338,7 @@ async function matchForfeit(req: Request, env: Env): Promise<Response> {
 // Router
 // ===========================================================================
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req, env) {
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
 
     const url = new URL(req.url);
@@ -413,7 +359,7 @@ export default {
       if (path === "/match/forfeit" && post) return await matchForfeit(req, env);
 
       return err("Not found", 404);
-    } catch (e: any) {
+    } catch (e) {
       return err("Server error: " + (e?.message ?? "unknown"), 500);
     }
   },
